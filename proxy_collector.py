@@ -5,6 +5,7 @@ from telethon.tl.types import Channel, Chat
 import os
 import requests
 from datetime import datetime, timedelta
+import sys
 
 api_id = os.environ.get('API_ID')
 api_hash = os.environ.get('API_HASH')
@@ -19,8 +20,8 @@ DEFAULT_GROUPS = [
     '@VpnTvGp', '@VPN_iransaz', '@chat_nakoni'
 ]
 
-GROUPS_FILE = 'groups.txt'
-CHANNELS_FILE = 'channels.txt'
+DEFAULT_CHANNELS = []  # add any default channels here
+
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
 SESSION_FILE = 'session.session'
@@ -32,9 +33,8 @@ SESSION_URLS = [
 
 class ConfigCollector:
     def __init__(self):
-        self.ensure_files_exist()
-        self.groups = self.load_list(GROUPS_FILE, DEFAULT_GROUPS)
-        self.channels = self.load_list(CHANNELS_FILE, [])
+        self.groups = DEFAULT_GROUPS.copy()
+        self.channels = DEFAULT_CHANNELS.copy()
         self.all_chats = self.groups + self.channels
         self.netmod_configs = self.load_configs(NETMOD_FILE)
         self.slipnet_configs = self.load_configs(SLIPNET_FILE)
@@ -42,54 +42,6 @@ class ConfigCollector:
         self.slipnet_new_count = 0
         self.discovered_usernames = set()
         self.group_stats = {chat: {'netmod': 0, 'slipnet': 0} for chat in self.all_chats}
-
-    def ensure_files_exist(self):
-        for filename, default_content in [
-            (GROUPS_FILE, '\n'.join(DEFAULT_GROUPS) + '\n'),
-            (CHANNELS_FILE, ''),
-            (NETMOD_FILE, ''),
-            (SLIPNET_FILE, '')
-        ]:
-            if not os.path.exists(filename):
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(default_content)
-
-    def load_list(self, filename, default):
-        items = []
-        if os.path.exists(filename):
-            with open(filename, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        if not line.startswith('@'):
-                            line = '@' + line
-                        items.append(line)
-        if not items:
-            items = default
-            self.save_list(filename, items)
-        return items
-
-    def save_list(self, filename, items):
-        with open(filename, 'w', encoding='utf-8') as f:
-            for item in sorted(items):
-                f.write(item + '\n')
-
-    def download_session(self):
-        if os.path.exists(SESSION_FILE):
-            return True
-        if not github_token:
-            return False
-        headers = {'Authorization': f'token {github_token}'}
-        for url in SESSION_URLS:
-            try:
-                response = requests.get(url, headers=headers, timeout=30)
-                if response.status_code == 200:
-                    with open(SESSION_FILE, 'wb') as f:
-                        f.write(response.content)
-                    return True
-            except Exception:
-                continue
-        return False
 
     def load_configs(self, filename):
         configs = set()
@@ -141,11 +93,10 @@ class ConfigCollector:
         return valid
 
     async def fetch_recent_messages(self):
-        one_hour_ago = datetime.now() - timedelta(hours=100)
+        one_hour_ago = datetime.now() - timedelta(hours=1)
         for chat_username in self.all_chats:
             try:
                 chat = await self.client.get_entity(chat_username)
-                chat_title = chat.title if hasattr(chat, 'title') else chat.username
                 async for message in self.client.iter_messages(chat):
                     if message.date.replace(tzinfo=None) < one_hour_ago:
                         break
@@ -205,14 +156,43 @@ class ConfigCollector:
                 continue
         if new_groups:
             self.groups.extend(new_groups)
-            self.save_list(GROUPS_FILE, self.groups)
         if new_channels:
             self.channels.extend(new_channels)
-            self.save_list(CHANNELS_FILE, self.channels)
         self.all_chats = self.groups + self.channels
-        # update group_stats for new ones
         for g in new_groups + new_channels:
             self.group_stats[g] = {'netmod': 0, 'slipnet': 0}
+
+    def update_source_lists(self):
+        script_path = sys.argv[0]
+        with open(script_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        def update_list(name, new_items):
+            pattern = re.compile(rf'({name}\s*=\s*\[)(.*?)(\])', re.DOTALL)
+            match = pattern.search(content)
+            if not match:
+                return content
+            start, inner, end = match.groups()
+            existing_items = re.findall(r"'([^']*)'", inner)
+            existing_set = set(existing_items)
+            new_unique = [f"'{item}'" for item in new_items if item not in existing_set]
+            if not new_unique:
+                return content
+            new_inner = inner.rstrip() + (',' if inner.strip() and not inner.strip().endswith(',') else '') + '\n    ' + ',\n    '.join(new_unique)
+            new_content = content[:match.start(2)] + new_inner + content[match.end(2):]
+            return new_content
+
+        if self.groups != DEFAULT_GROUPS:
+            new_groups = [g for g in self.groups if g not in DEFAULT_GROUPS]
+            if new_groups:
+                content = update_list('DEFAULT_GROUPS', new_groups)
+        if self.channels != DEFAULT_CHANNELS:
+            new_channels = [c for c in self.channels if c not in DEFAULT_CHANNELS]
+            if new_channels:
+                content = update_list('DEFAULT_CHANNELS', new_channels)
+
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(content)
 
     async def send_to_telegram(self):
         if not telegram_bot_token or not telegram_chat_id:
@@ -220,7 +200,6 @@ class ConfigCollector:
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M')
         total_netmod = len(self.netmod_configs)
         total_slipnet = len(self.slipnet_configs)
-        # Send netmod file with caption
         if os.path.exists(NETMOD_FILE) and os.path.getsize(NETMOD_FILE) > 0:
             caption = f"NetMod Configs - {current_time}\nTotal: {total_netmod}"
             try:
@@ -231,7 +210,6 @@ class ConfigCollector:
                     requests.post(url, data=data, files=files, timeout=60)
             except Exception:
                 pass
-        # Send slipnet file with caption
         if os.path.exists(SLIPNET_FILE) and os.path.getsize(SLIPNET_FILE) > 0:
             caption = f"Slipnet Configs - {current_time}\nTotal: {total_slipnet}"
             try:
@@ -269,10 +247,28 @@ class ConfigCollector:
         await self.classify_discovered()
         self.print_stats()
         await self.send_to_telegram()
+        self.update_source_lists()
         print("Waiting 2 minutes for new messages...")
         await asyncio.sleep(120)
         await self.client.disconnect()
         print("Disconnected.")
+
+    def download_session(self):
+        if os.path.exists(SESSION_FILE):
+            return True
+        if not github_token:
+            return False
+        headers = {'Authorization': f'token {github_token}'}
+        for url in SESSION_URLS:
+            try:
+                response = requests.get(url, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    with open(SESSION_FILE, 'wb') as f:
+                        f.write(response.content)
+                    return True
+            except Exception:
+                continue
+        return False
 
 async def main():
     collector = ConfigCollector()
