@@ -141,7 +141,7 @@ class ConfigCollector:
         return valid
 
     async def fetch_recent_messages(self):
-        one_hour_ago = datetime.now() - timedelta(hours=1)
+        one_hour_ago = datetime.now() - timedelta(hours=100)
         for chat_username in self.all_chats:
             try:
                 chat = await self.client.get_entity(chat_username)
