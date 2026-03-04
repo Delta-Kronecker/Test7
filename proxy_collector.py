@@ -12,12 +12,13 @@ github_token = os.environ.get('GH_TOKEN')
 telegram_bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
 telegram_chat_id = os.environ.get('TELEGRAM_CHAT_ID')
 
-group_usernames = [
+DEFAULT_GROUPS = [
     '@chatnakonn', '@v2ray_proxyz', '@VasLshoGap', '@chat_naakon',
     '@FlexEtesal', '@chat_nakonnn', '@letsproxys', '@Alpha_V2ray_Group',
     '@VpnTvGp', '@VPN_iransaz', '@chat_nakoni'
 ]
 
+GROUPS_FILE = 'monitored_groups.txt'
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
 SESSION_FILE = 'session.session'
@@ -29,12 +30,43 @@ SESSION_URLS = [
 
 class ConfigCollector:
     def __init__(self):
-        self.client = None
+        self.ensure_files_exist()
+        self.group_usernames = self.load_groups()
         self.netmod_configs = self.load_configs(NETMOD_FILE)
         self.slipnet_configs = self.load_configs(SLIPNET_FILE)
         self.netmod_new_count = 0
         self.slipnet_new_count = 0
-        self.group_counts = {}
+        self.discovered_groups = set()
+        self.group_stats = {group: {'netmod': 0, 'slipnet': 0} for group in self.group_usernames}
+
+    def ensure_files_exist(self):
+        for filename in [NETMOD_FILE, SLIPNET_FILE, GROUPS_FILE]:
+            if not os.path.exists(filename):
+                with open(filename, 'w', encoding='utf-8') as f:
+                    if filename == GROUPS_FILE:
+                        f.write('\n'.join(DEFAULT_GROUPS) + '\n')
+
+    def load_groups(self):
+        groups = []
+        if os.path.exists(GROUPS_FILE):
+            with open(GROUPS_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        if not line.startswith('@'):
+                            line = '@' + line
+                        groups.append(line)
+        if not groups:
+            groups = DEFAULT_GROUPS
+            self.save_groups(groups)
+        return groups
+
+    def save_groups(self, groups=None):
+        if groups is None:
+            groups = self.group_usernames
+        with open(GROUPS_FILE, 'w', encoding='utf-8') as f:
+            for g in sorted(groups):
+                f.write(g + '\n')
 
     def download_session(self):
         if os.path.exists(SESSION_FILE):
@@ -89,9 +121,22 @@ class ConfigCollector:
         result['slipnet'] = list(dict.fromkeys(result['slipnet']))
         return result
 
+    def extract_mentions(self, text):
+        if not text:
+            return set()
+        pattern = r'@(\w+)'
+        mentions = re.findall(pattern, text)
+        valid = set()
+        for m in mentions:
+            if len(m) >= 3 and not m.isdigit():
+                username = '@' + m
+                if username not in self.group_usernames:
+                    valid.add(username)
+        return valid
+
     async def fetch_recent_messages(self):
         one_hour_ago = datetime.now() - timedelta(hours=1)
-        for group in group_usernames:
+        for group in self.group_usernames:
             try:
                 chat = await self.client.get_entity(group)
                 chat_title = chat.title if hasattr(chat, 'title') else chat.username
@@ -103,28 +148,35 @@ class ConfigCollector:
                         for config in configs['netmod']:
                             if self.save_config(config, NETMOD_FILE, self.netmod_configs):
                                 self.netmod_new_count += 1
-                                self.group_counts[chat_title] = self.group_counts.get(chat_title, 0) + 1
+                                self.group_stats[group]['netmod'] += 1
                         for config in configs['slipnet']:
                             if self.save_config(config, SLIPNET_FILE, self.slipnet_configs):
                                 self.slipnet_new_count += 1
-                                self.group_counts[chat_title] = self.group_counts.get(chat_title, 0) + 1
-            except Exception:
+                                self.group_stats[group]['slipnet'] += 1
+                        mentions = self.extract_mentions(message.text)
+                        self.discovered_groups.update(mentions)
+            except Exception as e:
+                print(f"Error processing group {group}: {e}")
                 continue
 
     async def handle_new_message(self, event):
         message = event.message
         chat = await event.get_chat()
-        chat_title = chat.title if hasattr(chat, 'title') else chat.username
+        chat_username = chat.username if hasattr(chat, 'username') else None
         if message.text:
             configs = self.extract_configs(message.text)
             for config in configs['netmod']:
                 if self.save_config(config, NETMOD_FILE, self.netmod_configs):
                     self.netmod_new_count += 1
-                    self.group_counts[chat_title] = self.group_counts.get(chat_title, 0) + 1
+                    if chat_username:
+                        self.group_stats[chat_username]['netmod'] += 1
             for config in configs['slipnet']:
                 if self.save_config(config, SLIPNET_FILE, self.slipnet_configs):
                     self.slipnet_new_count += 1
-                    self.group_counts[chat_title] = self.group_counts.get(chat_title, 0) + 1
+                    if chat_username:
+                        self.group_stats[chat_username]['slipnet'] += 1
+            mentions = self.extract_mentions(message.text)
+            self.discovered_groups.update(mentions)
 
     async def send_to_telegram(self):
         if not telegram_bot_token or not telegram_chat_id:
@@ -139,7 +191,9 @@ class ConfigCollector:
         caption += f"Total collected:\n"
         caption += f"NetMod: {total_netmod}\n"
         caption += f"Slipnet: {total_slipnet}\n"
-        caption += f"Monitored groups: {len(group_usernames)}"
+        caption += f"Monitored groups: {len(self.group_usernames)}\n"
+        if self.discovered_groups:
+            caption += f"New groups discovered: {', '.join(sorted(self.discovered_groups))}"
         try:
             if os.path.exists(NETMOD_FILE) and os.path.getsize(NETMOD_FILE) > 0:
                 with open(NETMOD_FILE, 'rb') as f:
@@ -156,25 +210,50 @@ class ConfigCollector:
         except Exception:
             pass
 
+    def print_stats(self):
+        print("\n=== Config Collection Summary ===")
+        print(f"Total new NetMod configs: {self.netmod_new_count}")
+        print(f"Total new Slipnet configs: {self.slipnet_new_count}")
+        print("\nPer group statistics:")
+        for group, counts in self.group_stats.items():
+            if counts['netmod'] > 0 or counts['slipnet'] > 0:
+                print(f"{group}: NetMod={counts['netmod']}, Slipnet={counts['slipnet']}")
+        if self.discovered_groups:
+            print("\nNewly discovered groups (saved for future runs):")
+            for g in sorted(self.discovered_groups):
+                print(g)
+        print("================================")
+
     async def start(self):
         if not self.download_session():
+            print("Failed to download session file")
             return
         self.client = TelegramClient(SESSION_FILE, int(api_id), api_hash)
-        @self.client.on(events.NewMessage(chats=group_usernames))
+        @self.client.on(events.NewMessage(chats=self.group_usernames))
         async def message_handler(event):
             await self.handle_new_message(event)
         await self.client.start(phone=phone_number)
+        print("Connected. Fetching messages from last hour...")
         await self.fetch_recent_messages()
+        self.print_stats()
         await self.send_to_telegram()
+        if self.discovered_groups:
+            new_groups = list(set(self.discovered_groups) - set(self.group_usernames))
+            if new_groups:
+                self.group_usernames.extend(new_groups)
+                self.save_groups()
+                print(f"Added {len(new_groups)} new groups to monitored list.")
+        print("Waiting 2 minutes for new messages...")
         await asyncio.sleep(120)
         await self.client.disconnect()
+        print("Disconnected.")
 
 async def main():
     collector = ConfigCollector()
     try:
         await collector.start()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error: {e}")
 
 if __name__ == '__main__':
     asyncio.run(main())
