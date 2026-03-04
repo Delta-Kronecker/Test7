@@ -20,7 +20,7 @@ DEFAULT_GROUPS = [
     '@VpnTvGp', '@VPN_iransaz', '@chat_nakoni'
 ]
 
-DEFAULT_CHANNELS = []  # add any default channels here
+DEFAULT_CHANNELS = ['@ShadowProxy66'] 
 
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
