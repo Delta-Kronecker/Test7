@@ -36,32 +36,22 @@ class ConfigCollector:
         self.groups = DEFAULT_GROUPS.copy()
         self.channels = DEFAULT_CHANNELS.copy()
         self.all_chats = self.groups + self.channels
-        self.netmod_configs = self.load_configs(NETMOD_FILE)
-        self.slipnet_configs = self.load_configs(SLIPNET_FILE)
+        # برای ذخیره فقط کانفیگ‌های جدید این اجرا
+        self.netmod_new_configs = set()
+        self.slipnet_new_configs = set()
         self.netmod_new_count = 0
         self.slipnet_new_count = 0
         self.discovered_usernames = set()
         self.group_stats = {chat: {'netmod': 0, 'slipnet': 0} for chat in self.all_chats}
 
-    def load_configs(self, filename):
-        configs = set()
-        if os.path.exists(filename):
-            with open(filename, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        configs.add(line)
-        return configs
-
-    def save_config(self, config, filename, config_set):
-        if config in config_set:
-            return False
-        with open(filename, 'a', encoding='utf-8') as f:
-            if os.path.getsize(filename) > 0:
-                f.write('\n')
-            f.write(config + '\n')
-        config_set.add(config)
-        return True
+    def save_configs_to_file(self):
+        """ذخیره کانفیگ‌های جدید در فایل (بازنویسی کامل)"""
+        with open(NETMOD_FILE, 'w', encoding='utf-8') as f:
+            for config in sorted(self.netmod_new_configs):
+                f.write(config + '\n')
+        with open(SLIPNET_FILE, 'w', encoding='utf-8') as f:
+            for config in sorted(self.slipnet_new_configs):
+                f.write(config + '\n')
 
     def extract_configs(self, text):
         if not text:
@@ -93,7 +83,7 @@ class ConfigCollector:
         return valid
 
     async def fetch_recent_messages(self):
-        one_hour_ago = datetime.now() - timedelta(hours=1)
+        one_hour_ago = datetime.now() - timedelta(hours=24)
         for chat_username in self.all_chats:
             try:
                 chat = await self.client.get_entity(chat_username)
@@ -103,11 +93,13 @@ class ConfigCollector:
                     if message.text:
                         configs = self.extract_configs(message.text)
                         for config in configs['netmod']:
-                            if self.save_config(config, NETMOD_FILE, self.netmod_configs):
+                            if config not in self.netmod_new_configs:
+                                self.netmod_new_configs.add(config)
                                 self.netmod_new_count += 1
                                 self.group_stats[chat_username]['netmod'] += 1
                         for config in configs['slipnet']:
-                            if self.save_config(config, SLIPNET_FILE, self.slipnet_configs):
+                            if config not in self.slipnet_new_configs:
+                                self.slipnet_new_configs.add(config)
                                 self.slipnet_new_count += 1
                                 self.group_stats[chat_username]['slipnet'] += 1
                         mentions = self.extract_mentions(message.text)
@@ -123,12 +115,14 @@ class ConfigCollector:
         if chat_username and message.text:
             configs = self.extract_configs(message.text)
             for config in configs['netmod']:
-                if self.save_config(config, NETMOD_FILE, self.netmod_configs):
+                if config not in self.netmod_new_configs:
+                    self.netmod_new_configs.add(config)
                     self.netmod_new_count += 1
                     if chat_username in self.group_stats:
                         self.group_stats[chat_username]['netmod'] += 1
             for config in configs['slipnet']:
-                if self.save_config(config, SLIPNET_FILE, self.slipnet_configs):
+                if config not in self.slipnet_new_configs:
+                    self.slipnet_new_configs.add(config)
                     self.slipnet_new_count += 1
                     if chat_username in self.group_stats:
                         self.group_stats[chat_username]['slipnet'] += 1
@@ -137,7 +131,7 @@ class ConfigCollector:
 
     async def classify_discovered(self):
         if not self.discovered_usernames:
-            return
+            return 0, 0
         new_groups = []
         new_channels = []
         for username in self.discovered_usernames:
@@ -161,6 +155,7 @@ class ConfigCollector:
         self.all_chats = self.groups + self.channels
         for g in new_groups + new_channels:
             self.group_stats[g] = {'netmod': 0, 'slipnet': 0}
+        return len(new_groups), len(new_channels)
 
     def update_source_lists(self):
         script_path = sys.argv[0]
@@ -198,9 +193,9 @@ class ConfigCollector:
         if not telegram_bot_token or not telegram_chat_id:
             return
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M')
-        total_netmod = len(self.netmod_configs)
-        total_slipnet = len(self.slipnet_configs)
-        if os.path.exists(NETMOD_FILE) and os.path.getsize(NETMOD_FILE) > 0:
+        total_netmod = len(self.netmod_new_configs)
+        total_slipnet = len(self.slipnet_new_configs)
+        if self.netmod_new_configs:
             caption = f"NetMod Configs - {current_time}\nTotal: {total_netmod}"
             try:
                 with open(NETMOD_FILE, 'rb') as f:
@@ -210,7 +205,7 @@ class ConfigCollector:
                     requests.post(url, data=data, files=files, timeout=60)
             except Exception:
                 pass
-        if os.path.exists(SLIPNET_FILE) and os.path.getsize(SLIPNET_FILE) > 0:
+        if self.slipnet_new_configs:
             caption = f"Slipnet Configs - {current_time}\nTotal: {total_slipnet}"
             try:
                 with open(SLIPNET_FILE, 'rb') as f:
@@ -221,10 +216,15 @@ class ConfigCollector:
             except Exception:
                 pass
 
-    def print_stats(self):
+    def print_stats(self, new_groups_count, new_channels_count):
         print("\n=== Config Collection Summary ===")
         print(f"New NetMod configs: {self.netmod_new_count}")
         print(f"New Slipnet configs: {self.slipnet_new_count}")
+        print(f"Total unique NetMod in this run: {len(self.netmod_new_configs)}")
+        print(f"Total unique Slipnet in this run: {len(self.slipnet_new_configs)}")
+        print(f"Discovered usernames: {len(self.discovered_usernames)}")
+        print(f"  -> New groups: {new_groups_count}")
+        print(f"  -> New channels: {new_channels_count}")
         print("\nPer chat statistics:")
         for chat, counts in self.group_stats.items():
             if counts['netmod'] > 0 or counts['slipnet'] > 0:
@@ -244,8 +244,9 @@ class ConfigCollector:
         await self.client.start(phone=phone_number)
         print("Connected. Fetching messages from last hour...")
         await self.fetch_recent_messages()
-        await self.classify_discovered()
-        self.print_stats()
+        new_groups_count, new_channels_count = await self.classify_discovered()
+        self.save_configs_to_file()
+        self.print_stats(new_groups_count, new_channels_count)
         await self.send_to_telegram()
         self.update_source_lists()
         print("Waiting 2 minutes for new messages...")
