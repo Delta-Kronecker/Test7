@@ -135,7 +135,7 @@ class ConfigCollector:
         return valid
 
     async def fetch_recent_messages(self):
-        one_hour_ago = datetime.now() - timedelta(hours=72)
+        one_hour_ago = datetime.now() - timedelta(hours=1)
         for group in self.group_usernames:
             try:
                 chat = await self.client.get_entity(group)
