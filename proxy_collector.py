@@ -24,6 +24,7 @@ DEFAULT_CHANNELS = ['@ShadowProxy66']
 
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
+DNS_FILE = 'dns_ips.txt'                 # فایل ذخیره‌سازی DNS‌ها
 SESSION_FILE = 'session.session'
 
 SESSION_URLS = [
@@ -36,13 +37,27 @@ class ConfigCollector:
         self.groups = DEFAULT_GROUPS.copy()
         self.channels = DEFAULT_CHANNELS.copy()
         self.all_chats = self.groups + self.channels
-        # برای ذخیره فقط کانفیگ‌های جدید این اجرا
+        # کانفیگ‌های جدید در این اجرا
         self.netmod_new_configs = set()
         self.slipnet_new_configs = set()
         self.netmod_new_count = 0
         self.slipnet_new_count = 0
+        # DNS‌های جدید در این اجرا
+        self.dns_new_ips = set()
+        self.dns_new_count = 0
+        # تمام DNS‌های دیده‌شده تاکنون (بارگذاری شده از فایل)
+        self.dns_all_ips = set()
         self.discovered_usernames = set()
-        self.group_stats = {chat: {'netmod': 0, 'slipnet': 0} for chat in self.all_chats}
+        self.group_stats = {chat: {'netmod': 0, 'slipnet': 0, 'dns': 0} for chat in self.all_chats}
+
+    def load_dns_ips(self):
+        """بارگذاری DNS‌های ذخیره‌شده قبلی از فایل"""
+        if os.path.exists(DNS_FILE):
+            with open(DNS_FILE, 'r', encoding='utf-8') as f:
+                for line in f:
+                    ip = line.strip()
+                    if ip:
+                        self.dns_all_ips.add(ip)
 
     def save_configs_to_file(self):
         """ذخیره کانفیگ‌های جدید در فایل (بازنویسی کامل)"""
@@ -53,7 +68,19 @@ class ConfigCollector:
             for config in sorted(self.slipnet_new_configs):
                 f.write(config + '\n')
 
+    def save_dns_to_file(self):
+        """افزودن DNS‌های جدید به فایل (بدون تکرار)"""
+        # آی‌پی‌هایی که کاملاً جدید هستند (نه در فایل قبلی و نه در این اجرا ذخیره شده‌اند)
+        truly_new = self.dns_new_ips - self.dns_all_ips
+        if truly_new:
+            with open(DNS_FILE, 'a', encoding='utf-8') as f:
+                for ip in sorted(truly_new):
+                    f.write(ip + '\n')
+            # به‌روزرسانی مجموعه کل
+            self.dns_all_ips.update(truly_new)
+
     def extract_configs(self, text):
+        """استخراج کانفیگ‌های NetMod و Slipnet"""
         if not text:
             return {'netmod': [], 'slipnet': []}
         result = {'netmod': [], 'slipnet': []}
@@ -69,6 +96,19 @@ class ConfigCollector:
         result['slipnet'] = list(dict.fromkeys(result['slipnet']))
         return result
 
+    def extract_dns_ips(self, text):
+        """
+        استخراج آدرس‌های IPv4 که بعد از آنها فاصله یا انتهای خط آمده باشد.
+        الگو: چهار عدد که با نقطه جدا شده‌اند و پس از آن فضای خالی یا پایان رشته است.
+        """
+        if not text:
+            return []
+        # IPv4 با lookahead برای اطمینان از اینکه بعد از IP فاصله یا پایان است
+        pattern = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?=\s|$)'
+        matches = re.findall(pattern, text)
+        # حذف تکراری‌ها
+        return list(dict.fromkeys(matches))
+
     def extract_mentions(self, text):
         if not text:
             return set()
@@ -83,7 +123,8 @@ class ConfigCollector:
         return valid
 
     async def fetch_recent_messages(self):
-        one_hour_ago = datetime.now() - timedelta(hours=24)
+        """بررسی پیام‌های ۲۴ ساعت گذشته در همه چت‌ها"""
+        one_hour_ago = datetime.now() - timedelta(hours=120)
         for chat_username in self.all_chats:
             try:
                 chat = await self.client.get_entity(chat_username)
@@ -91,6 +132,7 @@ class ConfigCollector:
                     if message.date.replace(tzinfo=None) < one_hour_ago:
                         break
                     if message.text:
+                        # کانفیگ‌ها
                         configs = self.extract_configs(message.text)
                         for config in configs['netmod']:
                             if config not in self.netmod_new_configs:
@@ -102,6 +144,14 @@ class ConfigCollector:
                                 self.slipnet_new_configs.add(config)
                                 self.slipnet_new_count += 1
                                 self.group_stats[chat_username]['slipnet'] += 1
+                        # DNS‌ها
+                        dns_ips = self.extract_dns_ips(message.text)
+                        for ip in dns_ips:
+                            if ip not in self.dns_all_ips and ip not in self.dns_new_ips:
+                                self.dns_new_ips.add(ip)
+                                self.dns_new_count += 1
+                                self.group_stats[chat_username]['dns'] += 1
+                        # mentions
                         mentions = self.extract_mentions(message.text)
                         self.discovered_usernames.update(mentions)
             except Exception as e:
@@ -109,10 +159,12 @@ class ConfigCollector:
                 continue
 
     async def handle_new_message(self, event):
+        """مدیریت پیام‌های جدید"""
         message = event.message
         chat = await event.get_chat()
         chat_username = chat.username if hasattr(chat, 'username') else None
         if chat_username and message.text:
+            # کانفیگ‌ها
             configs = self.extract_configs(message.text)
             for config in configs['netmod']:
                 if config not in self.netmod_new_configs:
@@ -126,6 +178,15 @@ class ConfigCollector:
                     self.slipnet_new_count += 1
                     if chat_username in self.group_stats:
                         self.group_stats[chat_username]['slipnet'] += 1
+            # DNS‌ها
+            dns_ips = self.extract_dns_ips(message.text)
+            for ip in dns_ips:
+                if ip not in self.dns_all_ips and ip not in self.dns_new_ips:
+                    self.dns_new_ips.add(ip)
+                    self.dns_new_count += 1
+                    if chat_username in self.group_stats:
+                        self.group_stats[chat_username]['dns'] += 1
+            # mentions
             mentions = self.extract_mentions(message.text)
             self.discovered_usernames.update(mentions)
 
@@ -154,7 +215,7 @@ class ConfigCollector:
             self.channels.extend(new_channels)
         self.all_chats = self.groups + self.channels
         for g in new_groups + new_channels:
-            self.group_stats[g] = {'netmod': 0, 'slipnet': 0}
+            self.group_stats[g] = {'netmod': 0, 'slipnet': 0, 'dns': 0}
         return len(new_groups), len(new_channels)
 
     def update_source_lists(self):
@@ -195,6 +256,9 @@ class ConfigCollector:
         current_time = datetime.now().strftime('%Y-%m-%d %H:%M')
         total_netmod = len(self.netmod_new_configs)
         total_slipnet = len(self.slipnet_new_configs)
+        total_dns = len(self.dns_all_ips)  # کل DNS‌های ذخیره‌شده تا الان
+
+        # ارسال فایل NetMod
         if self.netmod_new_configs:
             caption = f"NetMod Configs - {current_time}\nTotal: {total_netmod}"
             try:
@@ -205,6 +269,8 @@ class ConfigCollector:
                     requests.post(url, data=data, files=files, timeout=60)
             except Exception:
                 pass
+
+        # ارسال فایل Slipnet
         if self.slipnet_new_configs:
             caption = f"Slipnet Configs - {current_time}\nTotal: {total_slipnet}"
             try:
@@ -216,19 +282,33 @@ class ConfigCollector:
             except Exception:
                 pass
 
+        # ارسال فایل DNS (در صورت وجود DNS جدید در این اجرا)
+        if self.dns_new_count > 0:
+            caption = f"DNS IPs - {current_time}\nTotal unique: {total_dns}  (New: {self.dns_new_count})"
+            try:
+                with open(DNS_FILE, 'rb') as f:
+                    url = f"https://api.telegram.org/bot{telegram_bot_token}/sendDocument"
+                    files = {'document': f}
+                    data = {'chat_id': telegram_chat_id, 'caption': caption}
+                    requests.post(url, data=data, files=files, timeout=60)
+            except Exception:
+                pass
+
     def print_stats(self, new_groups_count, new_channels_count):
         print("\n=== Config Collection Summary ===")
         print(f"New NetMod configs: {self.netmod_new_count}")
         print(f"New Slipnet configs: {self.slipnet_new_count}")
+        print(f"New DNS IPs: {self.dns_new_count}")
         print(f"Total unique NetMod in this run: {len(self.netmod_new_configs)}")
         print(f"Total unique Slipnet in this run: {len(self.slipnet_new_configs)}")
+        print(f"Total unique DNS collected so far: {len(self.dns_all_ips)}")
         print(f"Discovered usernames: {len(self.discovered_usernames)}")
         print(f"  -> New groups: {new_groups_count}")
         print(f"  -> New channels: {new_channels_count}")
         print("\nPer chat statistics:")
         for chat, counts in self.group_stats.items():
-            if counts['netmod'] > 0 or counts['slipnet'] > 0:
-                print(f"{chat}: NetMod={counts['netmod']}, Slipnet={counts['slipnet']}")
+            if counts['netmod'] > 0 or counts['slipnet'] > 0 or counts['dns'] > 0:
+                print(f"{chat}: NetMod={counts['netmod']}, Slipnet={counts['slipnet']}, DNS={counts['dns']}")
         if self.discovered_usernames:
             print(f"\nDiscovered usernames: {', '.join(sorted(self.discovered_usernames))}")
         print("================================")
@@ -237,6 +317,8 @@ class ConfigCollector:
         if not self.download_session():
             print("Failed to download session file")
             return
+        # بارگذاری DNS‌های قبلی
+        self.load_dns_ips()
         self.client = TelegramClient(SESSION_FILE, int(api_id), api_hash)
         @self.client.on(events.NewMessage(chats=self.all_chats))
         async def message_handler(event):
@@ -246,6 +328,7 @@ class ConfigCollector:
         await self.fetch_recent_messages()
         new_groups_count, new_channels_count = await self.classify_discovered()
         self.save_configs_to_file()
+        self.save_dns_to_file()       # ذخیره DNS‌های جدید به‌صورت افزایشی
         self.print_stats(new_groups_count, new_channels_count)
         await self.send_to_telegram()
         self.update_source_lists()
