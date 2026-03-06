@@ -66,7 +66,20 @@ DEFAULT_GROUPS = [
     '@oxigen_sup',
     '@NaYab_Support',
     '@unxorn',
-    '@iraan4']
+    '@iraan4',
+    '@Mhmv2ray_bot',
+    '@rtxti',
+    '@Serveretbot',
+    '@TBG21_Support',
+    '@SoftNetConnect_bot',
+    '@MMDLeecherNimBot',
+    '@UNKNOWN9LADY',
+    '@ConfigPixelArtBot',
+    '@GithubGitlabDownloader_bot',
+    '@sam580233',
+    '@norbert',
+    '@Eag1e_YT_GP',
+    '@YamYamProxy1']
 
 DEFAULT_CHANNELS = ['@ShadowProxy66',
     '@england',
@@ -174,7 +187,21 @@ DEFAULT_CHANNELS = ['@ShadowProxy66',
     '@ARGO_VPNN',
     '@RAD_CR_VPN',
     '@v_2ra_yng',
-    '@vipde1'] 
+    '@vipde1',
+    '@AlFAProxy',
+    '@anushavpn',
+    '@IPMANTEAM',
+    '@ONE_SHOP_OFFICIAL',
+    '@BUGFREENET',
+    '@kanivpn',
+    '@oliver_soul',
+    '@GlobalNews_TV',
+    '@nvv2r',
+    '@MELIPROXYY',
+    '@Ha8TagShop',
+    '@iran_connect1',
+    '@Fouadi1',
+    '@wangcai2'] 
 
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
