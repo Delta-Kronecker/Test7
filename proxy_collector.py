@@ -79,7 +79,12 @@ DEFAULT_GROUPS = [
     '@sam580233',
     '@norbert',
     '@Eag1e_YT_GP',
-    '@YamYamProxy1']
+    '@YamYamProxy1',
+    '@photon',
+    '@v2ray443_support',
+    '@InfinityNetSupport',
+    '@UYTRDESWERT',
+    '@exchi']
 
 DEFAULT_CHANNELS = ['@ShadowProxy66',
     '@england',
@@ -201,7 +206,11 @@ DEFAULT_CHANNELS = ['@ShadowProxy66',
     '@Ha8TagShop',
     '@iran_connect1',
     '@Fouadi1',
-    '@wangcai2'] 
+    '@wangcai2',
+    '@NaYab_Net',
+    '@exonac',
+    '@xservervpn',
+    '@tunneltofan'] 
 
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
