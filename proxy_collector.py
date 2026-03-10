@@ -210,7 +210,9 @@ DEFAULT_CHANNELS = ['@ShadowProxy66',
     '@NaYab_Net',
     '@exonac',
     '@xservervpn',
-    '@tunneltofan'] 
+    '@tunneltofan',
+    '@V2RACONFING',
+    '@zep_shopp'] 
 
 NETMOD_FILE = 'netmod_configs.txt'
 SLIPNET_FILE = 'slipnet_configs.txt'
